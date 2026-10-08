@@ -1,1 +1,155 @@
-# cad-design-intelligence
+# CAD Design Intelligence — From Design Metadata to Rework Prediction
+
+**Can a CAD library predict shop-floor rework?** This project joins CAD design metadata
+(parts, tolerances, materials, revision history) to manufacturing rework logs, audits the data
+like a working analyst would, tests the patterns statistically, and ships a rework-risk model
+plus an interactive dashboard — ending in four data-backed design guidelines.
+
+Built as a portfolio project for data analyst / data scientist roles in engineering and R&D
+organizations (pipelines, test-data statistics, BI reporting, data governance, applied ML).
+
+---
+
+## The problem
+
+Engineering teams sit on two disconnected worlds: the **CAD library** (how parts were designed)
+and the **shop floor** (what went wrong building them). Rework is expensive — here, **$158,899**
+across 1,200 events — but nobody can answer *"which design choices drive it?"* because the data
+was never joined, cleaned, or modeled. This project does exactly that.
+
+## Datasets
+
+All synthetic (realistic patterns, illustrative magnitudes — rerun on a real PLM export).
+
+| Table | Rows (raw → clean) | What it is |
+|---|---|---|
+| `data/cad_parts.csv` | 3,012 → 2,992 | One row per part: category, material, mass, tolerance class, revision count, feature count, designer team, created/modified dates |
+| `data/design_changes.csv` | 13,759 → 13,609 | Change history: type, reason code, team, date per revision |
+| `data/manufacturing_rework.csv` | 1,200 | Every rework/scrap event: type, cost (USD), root cause, date |
+
+**Data-quality audit found (and the notebook quarantines all of it in `data/quarantine_log.csv`):**
+
+| Issue | Count |
+|---|---|
+| Duplicate `part_id` rows (conflicting data) | 12 ids |
+| Change records pointing at non-existent parts | 120 rows |
+| Changes dated before the part was created | 15 rows |
+| Parts with impossible mass (≤ 0 kg) | 8 rows |
+| Parts modified before creation date | 10 rows |
+| Missing `material` / `tolerance_class` | 60 / 150 rows → kept, labeled `unknown` |
+
+## Method (the notebook, 64 cells)
+
+`notebooks/cad_design_intelligence.ipynb` — one standalone, top-to-bottom-runnable notebook:
+
+1. **Load** — three CSVs, shapes, dtypes, date ranges
+2. **Data-quality audit** — missingness, duplicates, orphan keys, impossible dates/masses
+3. **Cleaning** — dedupe (keep highest revision), quarantine log, `unknown` labels for missing categoricals
+4. **Library profiling** — category/material/tolerance mix, revision-churn distribution, change trends
+5. **CAD × outcomes** — one row per part: design attributes + reworked flag + total rework cost
+6. **Statistical tests** — two-proportion z-test, chi-square, point-biserial, Mann-Whitney U
+7. **Rework-risk model** — leakage-safe (design-time features only), logistic regression vs random forest
+8. **Design guidelines** — quantified, wall-pinnable rules
+9. **Dashboard generation** — the notebook writes `dashboard/app.py` itself
+
+## Key findings
+
+- **Overall rework rate: 32.4%** of parts were reworked at least once; 1,200 events cost **$158,899**.
+- **Tight tolerance is the #1 driver:** 48.2% rework rate vs 28.2% for standard
+  (z = 8.47, p < 0.001) and vs 30.9% for loose. Chi-square confirms rework depends on
+  tolerance class (χ² = 81.3, p = 1.63e-17).
+- **Revision churn predicts rework:** parts revised more than 4 times rework at 44.2% vs 28.4%
+  for the rest (point-biserial r = 0.194, p = 1.16e-26).
+- **Worst combo:** abs_plastic + tight tolerance → **53.6%** rework rate.
+- **Top root causes:** tolerance stackup (410 events), design error (286), process variation (209).
+- **It's frequency, not unit cost:** median cost per rework event is $106 (tight) vs $108 (rest) —
+  the money is in *how often*, not *how much per event*. Tight-tolerance parts account for
+  28.4% of all rework cost.
+
+## The model
+
+Predicts *"will this part be reworked?"* from **design-time attributes only** — no change-history
+or rework-derived features, so it can score a part at design freeze (leakage-safe by construction).
+
+| Model | Test ROC-AUC |
+|---|---|
+| Logistic Regression | **0.620** |
+| Random Forest | 0.586 |
+
+Modest, and stated honestly: the value is that the model and the hypothesis tests agree on the
+same drivers (tight tolerance, revision count on top of feature importance) — converging evidence,
+not a black box. Coefficients are saved to `data/model_coefficients.json` and power the
+dashboard's live risk scorer.
+
+## Design guidelines (the deliverable an engineering leader keeps)
+
+1. **Require design-review sign-off** for every new tight-tolerance part (48% vs 28% rework).
+2. **Freeze designs after 4 revisions** — or trigger a root-cause review (44% rework beyond that).
+3. **Closing the tight-vs-standard gap** on 554 tight parts saves **~$18,159** in expected rework cost.
+4. **Ban abs_plastic where tolerance is tight** (53.6% rework) — prefer aluminum_6061.
+
+## Dashboard
+
+`dashboard/app.py` (Streamlit, generated by the notebook — rerunning the notebook regenerates it):
+
+- **📊 Overview** — KPI cards, rework rate by tolerance, root-cause breakdown, monthly rework cost trend
+- **🎯 Part risk scorer** — pick any part, get its rework probability with the top risk drivers explained
+- **🔍 Tolerance explorer** — tolerance × material heatmap, rework by category
+- **🔥 Churn leaderboard** — 20 most-revised parts with live risk scores and outcomes
+
+```bash
+pip install -r requirements.txt
+streamlit run dashboard/app.py
+```
+
+## How to run
+
+```bash
+# 1. (optional) regenerate the synthetic data
+python scripts/generate_datasets.py
+
+# 2. open the notebook and run top to bottom (it cleans, analyzes, models,
+#    saves 12 charts to visuals/, and writes dashboard/app.py)
+jupyter notebook notebooks/cad_design_intelligence.ipynb
+
+# 3. launch the dashboard
+streamlit run dashboard/app.py
+```
+
+## Project structure
+
+```
+cad-design-intelligence/
+├── README.md
+├── requirements.txt
+├── data/
+│   ├── cad_parts.csv / design_changes.csv / manufacturing_rework.csv   # raw synthetic sources
+│   ├── cad_parts_clean.csv / design_changes_clean.csv                  # cleaned (by the notebook)
+│   ├── quarantine_log.csv                                              # every quarantined record + reason
+│   └── model_coefficients.json                                         # fitted logistic model for the app
+├── notebooks/
+│   └── cad_design_intelligence.ipynb    # 64 cells: audit → clean → EDA → stats → model → dashboard
+├── dashboard/
+│   └── app.py                           # Streamlit app (generated by the notebook)
+├── visuals/                             # 12 charts saved by the notebook
+└── scripts/
+    ├── generate_datasets.py             # synthetic data generator (seeded, reproducible)
+    └── build_notebook.py                # builds the .ipynb programmatically
+```
+
+## Tech stack
+
+Python, pandas, NumPy, SciPy (hypothesis tests), scikit-learn, Matplotlib, Plotly, Streamlit.
+
+## Limitations & next steps
+
+- Data is synthetic: patterns are realistic, magnitudes illustrative — validate on the real PLM/MES export.
+- Next: join supplier data (`supplier_quality` is 10% of rework), time-based validation instead of random splits,
+  and pilot the risk score on one product line before rollout.
+
+---
+
+**Oct 2026** — *CAD Design Intelligence*: joined 3,000-part CAD library to 1,200 rework events;
+ran data-quality audit (143 records quarantined), hypothesis tests (tight tolerance 48% vs 28%
+rework, p < 0.001), and a leakage-safe rework-risk model (ROC-AUC 0.62); shipped 4 quantified
+design guidelines and a Streamlit dashboard with a live part risk scorer.

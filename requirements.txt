@@ -1,0 +1,9 @@
+# run the notebook
+pandas
+numpy
+matplotlib
+scikit-learn
+scipy
+# dashboard
+streamlit
+plotly
